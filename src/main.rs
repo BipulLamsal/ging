@@ -1,7 +1,4 @@
-use etherparse::err::packet;
 use etherparse::{Ipv4Header, Ipv4HeaderSlice, Ipv4Slice, Ipv6Header};
-use std::io::Write;
-use std::str::MatchIndices;
 use std::u16;
 use tun_tap::Iface;
 use tun_tap::Mode::Tun;
@@ -24,6 +21,7 @@ pub struct Connection<'a> {
     seq_no: u16,  //sequence
     data: &'a [u8],
 }
+
 impl<'a> Connection<'a> {
     pub fn start(
         iph: Ipv4HeaderSlice,
@@ -98,24 +96,26 @@ impl<'a> Connection<'a> {
         icmp_packet[6] = (self.seq_no >> 8) as u8;
         icmp_packet[7] = (self.seq_no & 0xFF) as u8;
 
-        let total_ip_header_len = (ip_header[..].len() + icmp_packet[..].len()) as u16;
-        ip_header[3] = (total_ip_header_len >> 8) as u8;
-        ip_header[2] = total_ip_header_len as u8;
+        let total_ip_header_len = (ip_header.len() + icmp_packet.len()) as u16;
+        // into big endian
+        let total_ip_header_len_be = total_ip_header_len.to_be_bytes();
+        ip_header[2..4].copy_from_slice(&total_ip_header_len_be); //rest of the data
 
-        //rest of the data
         icmp_packet[8..64].clone_from_slice(&self.data[8..64]);
         let sum = etherparse::checksum::Sum16BitWords::new();
         let iph_checksum = sum.add_slice(&ip_header[..]);
         let iph_checksum = iph_checksum.ones_complement();
 
-        ip_header[10] = (iph_checksum >> 8) as u8;
-        ip_header[11] = (iph_checksum & 0xff) as u8;
+        // also should be in big endian so i altered
+        ip_header[11] = (iph_checksum >> 8) as u8;
+        ip_header[10] = (iph_checksum & 0xff) as u8;
 
         calculate_checksum(&mut icmp_packet);
 
         // buf[..eth_header.len()].copy_from_slice(&eth_header);
         buf[..ip_header.len()].copy_from_slice(&ip_header);
         buf[ip_header.len()..ip_header.len() + icmp_packet.len()].copy_from_slice(&icmp_packet);
+
         let frame_length = ip_header.len() + icmp_packet.len();
 
         nic.send(&buf[..frame_length])?;
@@ -123,11 +123,13 @@ impl<'a> Connection<'a> {
     }
 }
 
+// Algortim to check the header length sums all the 16 bit word i.e 2 8 bit packets and sums
+// with the addition of carry to the end of the digit
 fn calculate_checksum(data: &mut [u8]) {
     let mut sum = 0u32;
     let mut i = 0;
 
-    // Sum all 16-bit words
+    // Sum of all bits in 32 as mentioned in rfc
     while i < data.len() - 1 {
         let word = ((data[i] as u32) << 8) | (data[i + 1] as u32);
         sum = sum.wrapping_add(word);
@@ -145,10 +147,9 @@ fn calculate_checksum(data: &mut [u8]) {
         sum = (sum & 0xffff) + (sum >> 16);
     }
 
-    // Calculate the one's complement of the sum
+    // Finally the compliment
     let checksum = !(sum as u16);
 
-    // Insert the checksum into the data at bytes 2 and 3
     data[2] = (checksum >> 8) as u8;
     data[3] = (checksum & 0xff) as u8;
 }
