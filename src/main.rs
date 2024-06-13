@@ -1,4 +1,4 @@
-use etherparse::{Ipv4Header, Ipv4HeaderSlice, Ipv4Slice, Ipv6Header};
+use etherparse::{Ipv4Header, Ipv4HeaderSlice};
 use std::u16;
 use tun_tap::Iface;
 use tun_tap::Mode::Tun;
@@ -51,9 +51,9 @@ impl<'a> Connection<'a> {
 
         //eth header
         let mut eth_header = [0u8; 14];
-        eth_header[0..6].copy_from_slice(&[0x12, 0x34, 0x56, 0x78, 0x9A, 0xBC]);
-        eth_header[6..12].copy_from_slice(&[0x12, 0x34, 0x56, 0x78, 0x9A, 0xBC]);
-        eth_header[12..14].copy_from_slice(&[0x08, 0x00]); //represents ipv4 protocol
+        // eth_header[0..6].copy_from_slice(&[0x12, 0x34, 0x56, 0x78, 0x9A, 0xBC]);
+        // eth_header[6..12].copy_from_slice(&[0x12, 0x34, 0x56, 0x78, 0x9A, 0xBC]);
+        // eth_header[12..14].copy_from_slice(&[0x08, 0x00]); //represents ipv4 protocol
 
         //ipheader has 20 bytes
         let mut ip_header = [0u8; 20];
@@ -81,8 +81,10 @@ impl<'a> Connection<'a> {
         ip_header[16..20].copy_from_slice(&self.ip.destination[0..4]);
         // end of ip header
 
+        const MESSAGE: &[u8] = b"brother";
+
         //start of icmp packet strcture
-        let mut icmp_packet = [0u8; 64];
+        let mut icmp_packet = [0u8; 64 + MESSAGE.len()];
         icmp_packet[0] = 0; // echo reply message
         icmp_packet[1] = 0; // code is zero for echo
 
@@ -102,6 +104,8 @@ impl<'a> Connection<'a> {
         ip_header[2..4].copy_from_slice(&total_ip_header_len_be); //rest of the data
 
         icmp_packet[8..64].clone_from_slice(&self.data[8..64]);
+        icmp_packet[64..64 + MESSAGE.len()].copy_from_slice(&MESSAGE);
+
         let sum = etherparse::checksum::Sum16BitWords::new();
         let iph_checksum = sum.add_slice(&ip_header[..]);
         let iph_checksum = iph_checksum.ones_complement();
@@ -110,13 +114,13 @@ impl<'a> Connection<'a> {
         ip_header[11] = (iph_checksum >> 8) as u8;
         ip_header[10] = (iph_checksum & 0xff) as u8;
 
+        let frame_length = ip_header.len() + icmp_packet.len();
+
         calculate_checksum(&mut icmp_packet);
 
         // buf[..eth_header.len()].copy_from_slice(&eth_header);
         buf[..ip_header.len()].copy_from_slice(&ip_header);
-        buf[ip_header.len()..ip_header.len() + icmp_packet.len()].copy_from_slice(&icmp_packet);
-
-        let frame_length = ip_header.len() + icmp_packet.len();
+        buf[ip_header.len()..frame_length].copy_from_slice(&icmp_packet);
 
         nic.send(&buf[..frame_length])?;
         Ok(())
